@@ -1,0 +1,78 @@
+version: "3.5"
+services:
+  gitlab:
+    image: gitlab/gitlab-ce:latest
+    hostname: "gitlab"
+    restart: unless-stopped
+    environment:
+      GITLAB_OMNIBUS_CONFIG: |
+        external_url 'http://gitlab'
+        gitlab_rails['gitlab_shell_ssh_port'] = 8822
+        gitlab_rails['initial_root_password'] = 'CHANGEME123'
+    ports:
+      - "50000:80"
+      - "8822:22"
+    volumes:
+      - ./data/docker/gitlab/etc/gitlab:/etc/gitlab
+      - ./data/docker/gitlab/var/opt/gitlab:/var/opt/gitlab
+      - ./data/docker/gitlab/var/log/gitlab:/var/log/gitlab
+    networks:
+      - gitlab_net
+
+  dind:
+    image: docker:20-dind
+    restart: always
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    command: ["--storage-driver=overlay2"]
+    volumes:
+      - ./data/dind/docker:/var/lib/docker
+    networks:
+      - gitlab_net
+    depends_on:
+      - gitlab
+
+  gitlab-runner:
+    build: .
+    image: my-gitlab-runner
+    restart: unless-stopped
+    environment:
+      DOCKER_HOST: tcp://dind:2375
+    volumes:
+      - ./config:/etc/gitlab-runner
+      - ./data/runner/cache:/cache
+    networks:
+      - gitlab_net
+    depends_on:
+      - gitlab
+      - dind
+
+  register-runner:
+    image: my-gitlab-runner
+    restart: "no"
+    environment:
+      REGISTRATION_TOKEN: ${REGISTRATION_TOKEN}
+      CI_SERVER_URL: http://gitlab
+    command:
+      - register
+      - --non-interactive
+      - --locked=false
+      - --name=${RUNNER_NAME}
+      - --executor=docker
+      - --url=http://gitlab
+      - --docker-image=docker:20-dind
+      - --docker-privileged
+      - --docker-volumes=/certs/client
+      - --docker-volumes=/cache
+    volumes:
+      - ./config:/etc/gitlab-runner
+    networks:
+      - gitlab_net
+    depends_on:
+      - gitlab
+      - dind
+
+networks:
+  gitlab_net:
+    name: gitlab_net
